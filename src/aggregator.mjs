@@ -76,8 +76,22 @@ function isValidNodeUri(line) {
   const body = line.split("://", 2)[1] || "";
   const mainPart = body.split("#", 1)[0];
   if (!mainPart || /\s/.test(mainPart)) return false;
-  if (scheme === "vmess" || scheme === "ssr") {
+
+  if (scheme === "vmess" && !mainPart.includes("@")) {
+    try {
+      const obj = JSON.parse(decodeBase64Safe(mainPart));
+      const net = String(obj.net || "").toLowerCase();
+      if (net === "h2" || net === "http" || Array.isArray(obj.path)) return false;
+      return Boolean(obj.add && obj.port);
+    } catch {
+      return false;
+    }
+  }
+  if (scheme === "ssr") {
     return mainPart.length >= 16;
+  }
+  if (/[?&]type=(h2|http)(?:&|$)/i.test(mainPart)) {
+    return false;
   }
   return mainPart.includes(":") && (mainPart.includes("@") || (scheme === "ss" && mainPart.length >= 16));
 }
