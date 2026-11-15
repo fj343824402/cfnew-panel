@@ -10,29 +10,56 @@ import requests
 
 SUB_URL = os.environ["TEAM_SUB_URL"].strip()
 MAX_KEEP = 350        # 最多保留前 350 个延迟最低的活节点
-TEST_URL = "https://www.youtube.com/generate_204"
-TIMEOUT_MS = 2500     # 2.5 秒内能连上 YouTube 才算活节点
-WORKERS = 80          # 80 并发测速
+TEST_URL = "https://www.gstatic.com/generate_204"
+TIMEOUT_MS = 2500
+WORKERS = 80
+
+VALID_SS_CIPHERS = {
+    "aes-128-gcm", "aes-192-gcm", "aes-256-gcm",
+    "chacha20-ietf-poly1305", "xchacha20-ietf-poly1305",
+    "aes-128-cfb", "aes-192-cfb", "aes-256-cfb",
+    "aes-128-ctr", "aes-192-ctr", "aes-256-ctr",
+    "rc4-md5", "chacha20-ietf", "chacha20",
+    "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm",
+    "2022-blake3-chacha20-poly1305", "none", "plain",
+}
+
+
+def b64_decode_str(text):
+    cleaned = "".join(text.split()).replace("-", "+").replace("_", "/")
+    cleaned += "=" * (-len(cleaned) % 4)
+    return base64.b64decode(cleaned).decode("utf-8", errors="ignore")
 
 
 def decode_base64_lines(text):
     text = text.strip()
     if "://" in text and "\n" in text:
         return [l.strip() for l in text.splitlines() if "://" in l]
-    cleaned = "".join(text.split()).replace("-", "+").replace("_", "/")
-    cleaned += "=" * (-len(cleaned) % 4)
-    raw = base64.b64decode(cleaned).decode("utf-8", errors="ignore")
+    raw = b64_decode_str(text)
     return [l.strip() for l in raw.splitlines() if "://" in l]
 
 
+def is_valid_ss_uri(uri):
+    try:
+        body = uri.split("://", 1)[1].split("#", 1)[0].split("?", 1)[0]
+        if "@" in body:
+            userinfo = body.split("@", 1)[0]
+            if ":" not in userinfo:
+                userinfo = b64_decode_str(userinfo)
+            method = userinfo.split(":", 1)[0].strip().lower()
+        else:
+            decoded = b64_decode_str(body)
+            method = decoded.split(":", 1)[0].strip().lower()
+        return method in VALID_SS_CIPHERS
+    except Exception:
+        return False
+
+
 def tag_node(uri, new_name):
-    """给节点打唯一序号别名，同时过滤引发 Mihomo 崩溃的 h2/http 节点"""
     low = uri.lower()
     try:
         if low.startswith("vmess://") and "@" not in uri.split("#", 1)[0]:
-            b64 = uri.split("://", 1)[1].strip().replace("-", "+").replace("_", "/")
-            b64 += "=" * (-len(b64) % 4)
-            obj = json.loads(base64.b64decode(b64).decode("utf-8"))
+            obj = json.loads(b64_decode_str(uri.split("://", 1)[1].split("#", 1)[0]))
             if str(obj.get("net", "")).lower() in ("h2", "http") or isinstance(obj.get("path"), list):
                 return None
             if not obj.get("add") or not (1 <= int(obj.get("port", 0)) <= 65535):
@@ -40,6 +67,8 @@ def tag_node(uri, new_name):
             obj["ps"] = new_name
             return "vmess://" + base64.b64encode(json.dumps(obj).encode()).decode()
         if low.startswith("ssr://"):
+            return None
+        if low.startswith("ss://") and not is_valid_ss_uri(uri):
             return None
         parsed = urllib.parse.urlsplit(uri)
         if re.search(r"(?:^|&)(?:type|net)=(?:h2|http)(?:&|$)", parsed.query, re.I):
@@ -80,7 +109,7 @@ def test_batch(tagged_batch, orig_map):
     proc = subprocess.Popen(["./mihomo", "-d", "runtime", "-f", cfg_file])
     try:
         loaded_names = []
-        for _ in range(12):  # 最多等 6 秒
+        for _ in range(12):
             time.sleep(0.5)
             if proc.poll() is not None:
                 return False, []
@@ -98,6 +127,8 @@ def test_batch(tagged_batch, orig_map):
         if not loaded_names:
             return False, []
 
+        sample_errors = []
+
         def check_one(name):
             try:
                 r = requests.get(
@@ -109,8 +140,11 @@ def test_batch(tagged_batch, orig_map):
                     d = r.json().get("delay")
                     if isinstance(d, int) and d > 0:
                         return (d, orig_map[name])
-            except Exception:
-                pass
+                elif len(sample_errors) < 3:
+                    sample_errors.append(f"{r.status_code}: {r.text[:100]}")
+            except Exception as e:
+                if len(sample_errors) < 3:
+                    sample_errors.append(str(e)[:100])
             return None
 
         alive = []
@@ -118,6 +152,8 @@ def test_batch(tagged_batch, orig_map):
             for res in ex.map(check_one, loaded_names):
                 if res:
                     alive.append(res)
+        if not alive and sample_errors:
+            print(f"Batch {len(loaded_names)} nodes -> 0 alive. Samples: {sample_errors}")
         return True, alive
     finally:
         proc.terminate()
@@ -156,7 +192,6 @@ def main():
             if c_ok:
                 alive.extend(c_alive)
             else:
-                # 这一批200个里有毒节点，再细拆成 40 个一批挽救其余好节点
                 for j in range(0, len(chunk), 40):
                     sub_ok, sub_alive = test_batch(chunk[j : j + 40], orig_map)
                     if sub_ok:
@@ -164,7 +199,7 @@ def main():
 
     alive.sort(key=lambda x: x[0])
     selected = [uri for _, uri in alive[:MAX_KEEP]]
-    print(f"Alive YouTube nodes: {len(alive)}, keeping top {len(selected)}")
+    print(f"Alive nodes: {len(alive)}, keeping top {len(selected)}")
     if not selected:
         raise RuntimeError("No alive nodes found, aborting so alive.txt is not overwritten with empty.")
 
