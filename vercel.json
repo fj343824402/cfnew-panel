@@ -1,14 +1,19 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null,
-  "outputDirectory": "public",
   "functions": {
     "api/index.mjs": {
+      "maxDuration": 60,
+      "includeFiles": "src/**"
+    },
+    "api/team-sub.mjs": {
       "maxDuration": 60,
       "includeFiles": "src/**"
     }
   },
   "rewrites": [
+    {
+      "source": "/team-sub",
+      "destination": "/api/team-sub"
+    },
     {
       "source": "/(.*)",
       "destination": "/api/index"
