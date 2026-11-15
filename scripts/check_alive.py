@@ -2,6 +2,7 @@ import base64
 import concurrent.futures
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.parse
@@ -25,12 +26,11 @@ def decode_base64_lines(text):
 
 
 def tag_node(uri, new_name):
-    """给节点临时打上唯一序号别名，测完再还原原节点（自动剔除引发 Mihomo 崩溃的 h2/http 节点）"""
+    """给节点打唯一序号别名，同时过滤引发 Mihomo 崩溃的 h2/http 节点"""
     low = uri.lower()
     try:
         if low.startswith("vmess://") and "@" not in uri:
-            b64 = uri.split("://", 1)[1].strip()
-            b64 = b64.replace("-", "+").replace("_", "/")
+            b64 = uri.split("://", 1)[1].strip().replace("-", "+").replace("_", "/")
             b64 += "=" * (-len(b64) % 4)
             obj = json.loads(base64.b64decode(b64).decode("utf-8"))
             if str(obj.get("net", "")).lower() in ("h2", "http") or isinstance(obj.get("path"), list):
@@ -42,8 +42,7 @@ def tag_node(uri, new_name):
         if low.startswith("ssr://"):
             return None
         parsed = urllib.parse.urlsplit(uri)
-        qs = urllib.parse.parse_qs(parsed.query)
-        if qs.get("type", [""])[0].lower() in ("h2", "http"):
+        if re.search(r"(?:^|&)(?:type|net)=(?:h2|http)(?:&|$)", parsed.query, re.I):
             return None
         if not parsed.hostname or not parsed.port or not (1 <= parsed.port <= 65535):
             return None
@@ -53,31 +52,16 @@ def tag_node(uri, new_name):
         return None
 
 
-def main():
-    print("Fetching raw subscription...")
-    resp = requests.get(SUB_URL, timeout=30, headers={"User-Agent": "v2rayN/6.45"})
-    resp.raise_for_status()
-    raw_uris = decode_base64_lines(resp.text)
-    print(f"Fetched {len(raw_uris)} raw URIs")
-
-    tagged_lines = []
-    orig_map = {}
-    for idx, uri in enumerate(raw_uris):
-        name = f"n_{idx}"
-        tagged = tag_node(uri, name)
-        if tagged:
-            tagged_lines.append(tagged)
-            orig_map[name] = uri
-
+def test_batch(tagged_batch, orig_map):
     os.makedirs("runtime", exist_ok=True)
     nodes_file = os.path.abspath("runtime/raw_nodes.txt")
     with open(nodes_file, "w", encoding="utf-8") as f:
-        f.write(base64.b64encode("\n".join(tagged_lines).encode()).decode())
+        f.write(base64.b64encode("\n".join(tagged_batch).encode()).decode())
 
     cfg = {
         "mixed-port": 7890,
         "mode": "rule",
-        "log-level": "silent",
+        "log-level": "error",
         "external-controller": "127.0.0.1:9090",
         "proxy-providers": {
             "pool": {
@@ -96,8 +80,10 @@ def main():
     proc = subprocess.Popen(["./mihomo", "-d", "runtime", "-f", cfg_file])
     try:
         loaded_names = []
-        for _ in range(40):
+        for _ in range(12):  # 最多等 6 秒
             time.sleep(0.5)
+            if proc.poll() is not None:
+                return False, []
             try:
                 r = requests.get("http://127.0.0.1:9090/providers/proxies/pool", timeout=2)
                 if r.status_code == 200:
@@ -109,7 +95,8 @@ def main():
             except Exception:
                 pass
 
-        print(f"Mihomo loaded {len(loaded_names)} valid nodes, testing YouTube 204...")
+        if not loaded_names:
+            return False, []
 
         def check_one(name):
             try:
@@ -131,24 +118,66 @@ def main():
             for res in ex.map(check_one, loaded_names):
                 if res:
                     alive.append(res)
-
-        alive.sort(key=lambda x: x[0])
-        selected = [uri for _, uri in alive[:MAX_KEEP]]
-        print(f"Alive YouTube nodes: {len(alive)}, keeping top {len(selected)}")
-
-        os.makedirs("alive_out", exist_ok=True)
-        out_b64 = base64.b64encode("\n".join(selected).encode()).decode()
-        with open("alive_out/alive.txt", "w", encoding="utf-8") as f:
-            f.write(out_b64)
-        with open("alive_out/stats.json", "w", encoding="utf-8") as f:
-            json.dump(
-                {"checked": len(loaded_names), "alive": len(alive), "kept": len(selected)},
-                f,
-                indent=2,
-            )
+        return True, alive
     finally:
         proc.terminate()
-        proc.wait(timeout=5)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+
+
+def main():
+    print("Fetching raw subscription...")
+    resp = requests.get(SUB_URL, timeout=30, headers={"User-Agent": "v2rayN/6.45"})
+    resp.raise_for_status()
+    raw_uris = decode_base64_lines(resp.text)
+    print(f"Fetched {len(raw_uris)} raw URIs")
+
+    tagged_lines = []
+    orig_map = {}
+    for idx, uri in enumerate(raw_uris):
+        name = f"n_{idx}"
+        tagged = tag_node(uri, name)
+        if tagged:
+            tagged_lines.append(tagged)
+            orig_map[name] = uri
+
+    print(f"Filtered valid URIs: {len(tagged_lines)}")
+    ok, alive = test_batch(tagged_lines, orig_map)
+
+    if not ok:
+        print("Full batch failed to load in Mihomo, falling back to 200-node chunks...")
+        alive = []
+        for i in range(0, len(tagged_lines), 200):
+            chunk = tagged_lines[i : i + 200]
+            c_ok, c_alive = test_batch(chunk, orig_map)
+            if c_ok:
+                alive.extend(c_alive)
+            else:
+                # 这一批200个里有毒节点，再细拆成 40 个一批挽救其余好节点
+                for j in range(0, len(chunk), 40):
+                    sub_ok, sub_alive = test_batch(chunk[j : j + 40], orig_map)
+                    if sub_ok:
+                        alive.extend(sub_alive)
+
+    alive.sort(key=lambda x: x[0])
+    selected = [uri for _, uri in alive[:MAX_KEEP]]
+    print(f"Alive YouTube nodes: {len(alive)}, keeping top {len(selected)}")
+    if not selected:
+        raise RuntimeError("No alive nodes found, aborting so alive.txt is not overwritten with empty.")
+
+    os.makedirs("alive_out", exist_ok=True)
+    out_b64 = base64.b64encode("\n".join(selected).encode()).decode()
+    with open("alive_out/alive.txt", "w", encoding="utf-8") as f:
+        f.write(out_b64)
+    with open("alive_out/stats.json", "w", encoding="utf-8") as f:
+        json.dump(
+            {"raw": len(raw_uris), "filtered": len(tagged_lines), "alive": len(alive), "kept": len(selected)},
+            f,
+            indent=2,
+        )
 
 
 if __name__ == "__main__":
