@@ -25,7 +25,7 @@ def decode_base64_lines(text):
 
 
 def tag_node(uri, new_name):
-    """给节点临时打上唯一序号别名，测完再还原原节点"""
+    """给节点临时打上唯一序号别名，测完再还原原节点（自动剔除引发 Mihomo 崩溃的 h2/http 节点）"""
     low = uri.lower()
     try:
         if low.startswith("vmess://") and "@" not in uri:
@@ -33,13 +33,18 @@ def tag_node(uri, new_name):
             b64 = b64.replace("-", "+").replace("_", "/")
             b64 += "=" * (-len(b64) % 4)
             obj = json.loads(base64.b64decode(b64).decode("utf-8"))
+            if str(obj.get("net", "")).lower() in ("h2", "http") or isinstance(obj.get("path"), list):
+                return None
             if not obj.get("add") or not (1 <= int(obj.get("port", 0)) <= 65535):
                 return None
             obj["ps"] = new_name
             return "vmess://" + base64.b64encode(json.dumps(obj).encode()).decode()
         if low.startswith("ssr://"):
-            return None  # 跳过老旧 ssr，减少 mihomo 解析异常
+            return None
         parsed = urllib.parse.urlsplit(uri)
+        qs = urllib.parse.parse_qs(parsed.query)
+        if qs.get("type", [""])[0].lower() in ("h2", "http"):
+            return None
         if not parsed.hostname or not parsed.port or not (1 <= parsed.port <= 65535):
             return None
         base_uri = urllib.parse.urlunsplit(parsed._replace(fragment=""))
