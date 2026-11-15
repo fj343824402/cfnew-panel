@@ -1,12 +1,15 @@
 // api/team-sub.mjs
 import { buildAggregatedSub } from "../src/aggregator.mjs";
 
+const ALIVE_RAW_URL =
+  "https://raw.githubusercontent.com/fj343824402/cfnew-panel/alive-sub/alive.txt";
+
 export default async function handler(req, res) {
   try {
     const host = req.headers.host || "localhost";
     const reqUrl = new URL(req.url || "/team-sub", `https://${host}`);
 
-    // 1. 团队密钥鉴权（在 Vercel 环境变量里设置 TEAM_TOKEN）
+    // 1. 团队密钥鉴权
     const expectedToken = (process.env.TEAM_TOKEN || "").trim();
     const gotToken = (reqUrl.searchParams.get("token") || "").trim();
     if (expectedToken && gotToken !== expectedToken) {
@@ -16,12 +19,29 @@ export default async function handler(req, res) {
       return;
     }
 
+    const mode = reqUrl.searchParams.get("mode") || "";
     const forceRefresh = reqUrl.searchParams.get("refresh") === "1";
     const isDebug = reqUrl.searchParams.get("debug") === "1";
 
+    // 2. 精选活节点模式（转发 GitHub Actions 测活后的纯活节点，若还没生成则自动降级）
+    if (mode === "alive" && !isDebug) {
+      try {
+        const r = await fetch(ALIVE_RAW_URL, { headers: { "User-Agent": "cfnew-panel" } });
+        if (r.ok) {
+          const aliveText = (await r.text()).trim();
+          if (aliveText) {
+            res.statusCode = 200;
+            res.setHeader("content-type", "text/plain; charset=utf-8");
+            res.setHeader("cache-control", "s-maxage=300, stale-while-revalidate=60");
+            res.end(aliveText);
+            return;
+          }
+        }
+      } catch {}
+    }
+
     const { base64, stats } = await buildAggregatedSub({ forceRefresh });
 
-    // ?debug=1 方便你在浏览器里直观检查每个公开源抓了多少节点
     if (isDebug) {
       res.statusCode = 200;
       res.setHeader("content-type", "application/json; charset=utf-8");
@@ -31,7 +51,6 @@ export default async function handler(req, res) {
 
     res.statusCode = 200;
     res.setHeader("content-type", "text/plain; charset=utf-8");
-    // 允许客户端及边缘短暂缓存 5 分钟
     res.setHeader("cache-control", "s-maxage=300, stale-while-revalidate=60");
     res.end(base64);
   } catch (err) {
