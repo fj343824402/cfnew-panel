@@ -29,7 +29,7 @@ def tag_node(uri, new_name):
     """给节点打唯一序号别名，同时过滤引发 Mihomo 崩溃的 h2/http 节点"""
     low = uri.lower()
     try:
-        if low.startswith("vmess://") and "@" not in uri:
+        if low.startswith("vmess://") and "@" not in uri.split("#", 1)[0]:
             b64 = uri.split("://", 1)[1].strip().replace("-", "+").replace("_", "/")
             b64 += "=" * (-len(b64) % 4)
             obj = json.loads(base64.b64decode(b64).decode("utf-8"))
