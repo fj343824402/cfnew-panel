@@ -70,7 +70,7 @@ async function fetchSingleSource(url, label, timeoutMs = 6500) {
   try {
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: { "User-Agent": "clash.meta" },
+      headers: { "User-Agent": "v2rayN/6.45" },
     });
     if (!res.ok) {
       return { label, ok: false, status: res.status, nodes: [] };
