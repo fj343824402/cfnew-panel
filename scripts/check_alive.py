@@ -132,7 +132,7 @@ def test_batch(tagged_batch, orig_map):
         def check_one(name):
             try:
                 r = requests.get(
-                    f"http://127.0.0.1:9090/proxies/{name}/delay",
+                    f"http://127.0.0.1:9090/providers/proxies/pool/{name}/healthcheck",
                     params={"url": TEST_URL, "timeout": TIMEOUT_MS},
                     timeout=(2, TIMEOUT_MS / 1000 + 2),
                 )
