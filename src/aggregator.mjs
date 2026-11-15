@@ -19,6 +19,10 @@ const CANDIDATE_FILENAMES = [
 const GITHUB_SEARCH_QUERIES = [
   "free v2ray nodes sub in:name,description,readme",
   "vless trojan free nodes in:name,description",
+  "clash free proxy", 
+  "hysteria2 reality free",
+  "free nodes subscribe",
+  
 ];
 
 const VALID_PROTO_REGEX = /^(vless|vmess|trojan|ss|ssr|hysteria|hysteria2|hy2|tuic):\/\//i;
