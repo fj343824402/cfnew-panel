@@ -22,16 +22,27 @@ jobs:
         run: pip install requests
 
       - name: Download Mihomo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          URL=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-            | grep -oE 'https://[^"]+mihomo-linux-amd64-compatible-v[0-9.]+\.gz' | head -n 1)
-          if [ -z "$URL" ]; then
-            URL=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-              | grep -oE 'https://[^"]+mihomo-linux-amd64-v[0-9.]+\.gz' | head -n 1)
-          fi
-          curl -L "$URL" -o mihomo.gz
+          python3 - << 'EOF'
+          import json, os, re, urllib.request
+          req = urllib.request.Request(
+              "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest",
+              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "User-Agent": "gh-action"}
+          )
+          data = json.loads(urllib.request.urlopen(req, timeout=20).read().decode())
+          assets = [a["browser_download_url"] for a in data.get("assets", [])]
+          pick = next((u for u in assets if re.search(r"mihomo-linux-amd64-compatible-v[\d.]+\.gz$", u)), None) \
+              or next((u for u in assets if re.search(r"mihomo-linux-amd64-v[\d.]+\.gz$", u)), None)
+          if not pick:
+              raise RuntimeError(f"No matching mihomo asset: {assets[:10]}")
+          print("Downloading:", pick)
+          urllib.request.urlretrieve(pick, "mihomo.gz")
+          EOF
           gunzip -f mihomo.gz
           chmod +x mihomo
+          ./mihomo -v
 
       - name: Run YouTube 204 health check
         env:
