@@ -2,7 +2,7 @@ name: Auto Check Alive Nodes
 
 on:
   schedule:
-    - cron: "*/30 * * * *" # 每 30 分钟自动测活一次
+    - cron: '0 */2 * * *' # 每 2 小时自动测活一次
   workflow_dispatch:       # 支持在网页端手动点按钮立刻跑一次
 
 permissions:
