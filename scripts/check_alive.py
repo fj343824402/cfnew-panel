@@ -9,7 +9,7 @@ import urllib.parse
 import requests
 
 SUB_URL = os.environ["TEAM_SUB_URL"].strip()
-MAX_KEEP = 350        # 最多保留前 350 个延迟最低的活节点
+MAX_KEEP = 1000        # 最多保留前 350 个延迟最低的活节点
 TEST_URL = "https://www.gstatic.com/generate_204"
 TIMEOUT_MS = 2500
 WORKERS = 80
