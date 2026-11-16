@@ -9,7 +9,7 @@ import urllib.parse
 import requests
 
 SUB_URL = os.environ["TEAM_SUB_URL"].strip()
-MAX_KEEP = 1200        # 最多保留前 350 个延迟最低的活节点
+MAX_KEEP = 350        # 最多保留前 350 个延迟最低的活节点
 TEST_URL = "https://www.gstatic.com/generate_204"
 TIMEOUT_MS = 2500
 WORKERS = 80
@@ -71,8 +71,11 @@ def tag_node(uri, new_name):
         if low.startswith("ss://") and not is_valid_ss_uri(uri):
             return None
         parsed = urllib.parse.urlsplit(uri)
-        if re.search(r"(?:^|&)(?:type|net)=(?:h2|http)(?:&|$)", parsed.query, re.I):
-            return None
+        clean_query = parsed.query.replace("&amp;", "&")
+        q_params = urllib.parse.parse_qs(clean_query)
+        for qk in ("type", "net", "network", "obfs"):
+            if any(v.lower() in ("h2", "http") for v in q_params.get(qk, [])):
+                return None
         if not parsed.hostname or not parsed.port or not (1 <= parsed.port <= 65535):
             return None
         base_uri = urllib.parse.urlunsplit(parsed._replace(fragment=""))
@@ -181,21 +184,24 @@ def main():
             orig_map[name] = uri
 
     print(f"Filtered valid URIs: {len(tagged_lines)}")
-    ok, alive = test_batch(tagged_lines, orig_map)
 
+    def _test_with_bisect(batch):
+        b_ok, b_alive = test_batch(batch, orig_map)
+        if b_ok:
+            return b_alive
+        if len(batch) <= 1:
+            return []
+        mid = len(batch) // 2
+        return _test_with_bisect(batch[:mid]) + _test_with_bisect(batch[mid:])
+
+    ok, alive = test_batch(tagged_lines, orig_map)
     if not ok:
-        print("Full batch failed to load in Mihomo, falling back to 200-node chunks...")
+        print("Full batch failed to load in Mihomo, bisecting 200-node chunks...")
         alive = []
         for i in range(0, len(tagged_lines), 200):
-            chunk = tagged_lines[i : i + 200]
-            c_ok, c_alive = test_batch(chunk, orig_map)
-            if c_ok:
-                alive.extend(c_alive)
-            else:
-                for j in range(0, len(chunk), 40):
-                    sub_ok, sub_alive = test_batch(chunk[j : j + 40], orig_map)
-                    if sub_ok:
-                        alive.extend(sub_alive)
+            alive.extend(_test_with_bisect(tagged_lines[i : i + 200]))
+
+    alive.sort(key=lambda x: x[0])
 
     alive.sort(key=lambda x: x[0])
     selected = [uri for _, uri in alive[:MAX_KEEP]]
