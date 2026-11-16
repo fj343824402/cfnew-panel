@@ -54,10 +54,10 @@ export default async function handler(req, res) {
 
     res.statusCode = 200;
     res.setHeader("content-type", "text/plain; charset=utf-8");
-    res.setHeader("cache-control", "s-maxage=300, stale-while-revalidate=60");
-    if (!forceRefresh) {
-      res.setHeader("cache-control", "public, s-maxage=300, stale-while-revalidate=600");
-    }
+    res.setHeader(
+      "cache-control",
+      forceRefresh ? "no-store" : "public, s-maxage=300, stale-while-revalidate=600"
+    );
     res.end(base64);
   } catch (err) {
     res.statusCode = 500;
